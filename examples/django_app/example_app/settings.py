@@ -33,7 +33,8 @@ INSTALLED_APPS = (
 # ChatterBot settings
 
 CHATTERBOT = {
-    'name': 'Django ChatterBot Example'
+    'name': 'Django ChatterBot Example',
+    'django_app_name': 'django_chatterbot'
 }
 
 MIDDLEWARE_CLASSES = (

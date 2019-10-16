@@ -1,2 +1,2 @@
-django<2.0.0,>=1.8.0
-chatterbot<0.5.0,>=0.4.7
+django>=2.2,<2.3
+# chatterbot>=0.8,<1.1

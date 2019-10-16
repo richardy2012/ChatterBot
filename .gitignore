@@ -1,22 +1,17 @@
 bin
 build
 dist
-include
-lib
 venv
+.env
+.out
+.tox
+.coverage
 *.pyc
 *.swp
 *.egg-info
+*.egg/*
+*.eggs/*
+*.doctrees
 
 # Database files
 *.sqlite3
-*.db
-
-# Sphinx docs
-docs/_build/
-
-# IntelliJ
-.idea
-*.iml
-
-examples/settings.py

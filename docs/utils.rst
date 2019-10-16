@@ -5,28 +5,26 @@ Utility Methods
 ChatterBot has a utility module that contains
 a collection of miscellaneous but useful functions.
 
-Module Imports
+
+Module imports
 --------------
 
-.. autofunction:: chatterbot.utils.module_loading.import_module
+.. autofunction:: chatterbot.utils.import_module
 
-String cleaning
----------------
 
-This package of utility contains methods that are usefull
-for cleaning and normalizing strings of text.
+Class initialization
+--------------------
 
-.. autofunction:: chatterbot.utils.clean.clean_whitespace
+.. autofunction:: chatterbot.utils.initialize_class
 
-.. autofunction:: chatterbot.utils.clean.clean
 
-Terminal input
---------------
+ChatBot response time
+---------------------
 
-.. autofunction:: chatterbot.utils.read_input.input_function
+.. autofunction:: chatterbot.utils.get_response_time
 
-Queues
-------
 
-.. autoclass:: chatterbot.utils.queues.ResponseQueue
-   :members:
+Parsing datetime information
+----------------------------
+
+.. autofunction:: chatterbot.parsing.datetime_parsing

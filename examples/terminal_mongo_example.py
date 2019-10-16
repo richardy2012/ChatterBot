@@ -1,29 +1,28 @@
 from chatterbot import ChatBot
-import logging
 
-
-# Uncomment the following line to enable verbose logging
+# Uncomment the following lines to enable verbose logging
+# import logging
 # logging.basicConfig(level=logging.INFO)
 
 # Create a new ChatBot instance
-bot = ChatBot('Terminal',
-    storage_adapter='chatterbot.adapters.storage.MongoDatabaseAdapter',
+bot = ChatBot(
+    'Terminal',
+    storage_adapter='chatterbot.storage.MongoDatabaseAdapter',
     logic_adapters=[
-        'chatterbot.adapters.logic.ClosestMatchAdapter'
+        'chatterbot.logic.BestMatch'
     ],
-    filters=[
-        'chatterbot.filters.RepetitiveResponseFilter'
-    ],
-    input_adapter='chatterbot.adapters.input.TerminalAdapter',
-    output_adapter='chatterbot.adapters.output.TerminalAdapter',
-    database='chatterbot-database'
+    database_uri='mongodb://localhost:27017/chatterbot-database'
 )
 
 print('Type something to begin...')
 
 while True:
     try:
-        bot_input = bot.get_response(None)
+        user_input = input()
+
+        bot_response = bot.get_response(user_input)
+
+        print(bot_response)
 
     # Press ctrl-c or ctrl-d on the keyboard to exit
     except (KeyboardInterrupt, EOFError, SystemExit):

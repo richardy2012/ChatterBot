@@ -1,254 +1,275 @@
-from .adapters.storage import StorageAdapter
-from .adapters.logic import LogicAdapter, MultiLogicAdapter
-from .adapters.input import InputAdapter
-from .adapters.output import OutputAdapter
-from .conversation import Statement, Response
-from .utils.queues import ResponseQueue
-from .utils.module_loading import import_module
 import logging
+from chatterbot.storage import StorageAdapter
+from chatterbot.logic import LogicAdapter
+from chatterbot.search import TextSearch, IndexedTextSearch
+from chatterbot import utils
 
 
 class ChatBot(object):
+    """
+    A conversational dialog chat bot.
+    """
 
     def __init__(self, name, **kwargs):
         self.name = name
-        kwargs['name'] = name
 
-        storage_adapter = kwargs.get('storage_adapter',
-            'chatterbot.adapters.storage.JsonFileStorageAdapter'
-        )
+        storage_adapter = kwargs.get('storage_adapter', 'chatterbot.storage.SQLStorageAdapter')
 
         logic_adapters = kwargs.get('logic_adapters', [
-            'chatterbot.adapters.logic.ClosestMatchAdapter'
+            'chatterbot.logic.BestMatch'
         ])
 
-        input_adapter = kwargs.get('input_adapter',
-            'chatterbot.adapters.input.VariableInputTypeAdapter'
-        )
+        # Check that each adapter is a valid subclass of it's respective parent
+        utils.validate_adapter_class(storage_adapter, StorageAdapter)
 
-        output_adapter = kwargs.get('output_adapter',
-            'chatterbot.adapters.output.OutputFormatAdapter'
-        )
+        # Logic adapters used by the chat bot
+        self.logic_adapters = []
 
-        # The last 10 statement inputs and outputs
-        self.recent_statements = ResponseQueue(maxsize=10)
+        self.storage = utils.initialize_class(storage_adapter, **kwargs)
 
-        # The storage adapter must be an instance of StorageAdapter
-        self.validate_adapter_class(storage_adapter, StorageAdapter)
+        primary_search_algorithm = IndexedTextSearch(self, **kwargs)
+        text_search_algorithm = TextSearch(self, **kwargs)
 
-        # The input adapter must be an instance of InputAdapter
-        self.validate_adapter_class(input_adapter, InputAdapter)
-
-        # The output adapter must be an instance of OutputAdapter
-        self.validate_adapter_class(output_adapter, OutputAdapter)
-
-        StorageAdapterClass = import_module(storage_adapter)
-        InputAdapterClass = import_module(input_adapter)
-        OutputAdapterClass = import_module(output_adapter)
-
-        self.storage = StorageAdapterClass(**kwargs)
-        self.logic = MultiLogicAdapter(**kwargs)
-        self.input = InputAdapterClass(**kwargs)
-        self.output = OutputAdapterClass(**kwargs)
-
-        filters = kwargs.get('filters', tuple())
-        self.filters = (import_module(F)() for F in filters)
-
-        # Add required system logic adapter
-        self.add_adapter('chatterbot.adapters.logic.NoKnowledgeAdapter')
+        self.search_algorithms = {
+            primary_search_algorithm.name: primary_search_algorithm,
+            text_search_algorithm.name: text_search_algorithm
+        }
 
         for adapter in logic_adapters:
-            self.add_adapter(adapter, **kwargs)
+            utils.validate_adapter_class(adapter, LogicAdapter)
+            logic_adapter = utils.initialize_class(adapter, self, **kwargs)
+            self.logic_adapters.append(logic_adapter)
 
-        # Share context information such as the name, the current conversation,
-        # or access to other adapters with each of the adapters
-        self.storage.set_context(self)
-        self.logic.set_context(self)
-        self.input.set_context(self)
-        self.output.set_context(self)
+        preprocessors = kwargs.get(
+            'preprocessors', [
+                'chatterbot.preprocessors.clean_whitespace'
+            ]
+        )
 
-        # Use specified trainer or fall back to the default
-        trainer = kwargs.get('trainer', 'chatterbot.trainers.Trainer')
-        TrainerClass = import_module(trainer)
-        self.trainer = TrainerClass(self.storage)
+        self.preprocessors = []
+
+        for preprocessor in preprocessors:
+            self.preprocessors.append(utils.import_module(preprocessor))
 
         self.logger = kwargs.get('logger', logging.getLogger(__name__))
 
-    def add_adapter(self, adapter, **kwargs):
-        self.validate_adapter_class(adapter, LogicAdapter)
+        # Allow the bot to save input it receives so that it can learn
+        self.read_only = kwargs.get('read_only', False)
 
-        NewAdapter = import_module(adapter)
-        adapter = NewAdapter(**kwargs)
-        self.logic.add_adapter(adapter)
-
-    def insert_logic_adapter(self, logic_adapter, insert_index, **kwargs):
-        """
-        Adds a logic adapter at a specified index.
-
-        :param logic_adapter: The string path to the logic adapter to add.
-        :type logic_adapter: class
-
-        :param insert_index: The index to insert the logic adapter into the list at.
-        :type insert_index: int
-
-        :raises: InvalidAdapterException
-        """
-        self.validate_adapter_class(logic_adapter, LogicAdapter)
-
-        NewAdapter = import_module(logic_adapter)
-        adapter = NewAdapter(**kwargs)
-
-        self.logic.adapters.insert(insert_index, adapter)
-
-    def remove_logic_adapter(self, adapter_name):
-        """
-        Removes a logic adapter from the chat bot.
-
-        :param adapter_name: The class name of the adapter to remove.
-        :type adapter_name: str
-        """
-        for index, adapter in enumerate(self.logic.adapters):
-            if adapter_name == type(adapter).__name__:
-                del(self.logic.adapters[index])
-                return True
-        return False
-
-    def validate_adapter_class(self, validate_class, adapter_class):
-        """
-        Raises an exception if validate_class is not a
-        subclass of adapter_class.
-
-        :param validate_class: The class to be validated.
-        :type validate_class: class
-
-        :param adapter_class: The class type to check against.
-        :type adapter_class: class
-
-        :raises: InvalidAdapterException
-        """
-        from .adapters import Adapter
-
-        if not issubclass(import_module(validate_class), Adapter):
-            raise self.InvalidAdapterException(
-                '{} must be a subclass of {}'.format(
-                    validate_class,
-                    Adapter.__name__
-                )
-            )
-
-        if not issubclass(import_module(validate_class), adapter_class):
-            raise self.InvalidAdapterException(
-                '{} must be a subclass of {}'.format(
-                    validate_class,
-                    adapter_class.__name__
-                )
-            )
-
-    def get_last_conversance(self):
-        """
-        Return the most recent input statement and response pair.
-        """
-        if not self.recent_statements.empty():
-            return self.recent_statements[-1]
-        return None
-
-    def get_last_response_statement(self):
-        """
-        Return the last statement that was received.
-        """
-        previous_interaction = self.get_last_conversance()
-        if previous_interaction:
-            # Return the output statement
-            return previous_interaction[1]
-        return None
-
-    def get_last_input_statement(self):
-        """
-        Return the last response that was given.
-        """
-        previous_interaction = self.get_last_conversance()
-        if previous_interaction:
-            # Return the input statement
-            return previous_interaction[0]
-        return None
-
-    def get_response(self, input_item):
+    def get_response(self, statement=None, **kwargs):
         """
         Return the bot's response based on the input.
 
-        :param input_item: An input value.
-        :returns: Statement -- the response to the input.
+        :param statement: An statement object or string.
+        :returns: A response to the input.
+        :rtype: Statement
+
+        :param additional_response_selection_parameters: Parameters to pass to the
+            chat bot's logic adapters to control response selection.
+        :type additional_response_selection_parameters: dict
+
+        :param persist_values_to_response: Values that should be saved to the response
+            that the chat bot generates.
+        :type persist_values_to_response: dict
         """
-        input_statement = self.input.process_input(input_item)
-        self.logger.info(u'Recieved input statement: {}'.format(input_statement.text))
+        Statement = self.storage.get_object('statement')
 
-        self.storage.generate_base_query(self)
+        additional_response_selection_parameters = kwargs.pop('additional_response_selection_parameters', {})
 
-        existing_statement = self.storage.find(input_statement.text)
+        persist_values_to_response = kwargs.pop('persist_values_to_response', {})
 
-        if existing_statement:
-            self.logger.info(u'"{}" is a known statement'.format(input_statement.text))
-            if input_statement.extra_data:
-                existing_statement.extra_data.update(input_statement.extra_data)
-            input_statement = existing_statement
-        else:
-            self.logger.info(u'"{}" is not a known statement'.format(input_statement.text))
+        if isinstance(statement, str):
+            kwargs['text'] = statement
 
-        # Select a response to the input statement
-        confidence, response = self.logic.process(input_statement)
-        self.logger.info(u'Selecting "{}" as response with a confidence of {}'.format(response.text, confidence))
+        if isinstance(statement, dict):
+            kwargs.update(statement)
 
-        if input_statement.extra_data:
-            response.extra_data.update(input_statement.extra_data)
-
-        previous_statement = self.get_last_response_statement()
-
-        if previous_statement:
-            input_statement.add_response(
-                Response(previous_statement.text)
+        if statement is None and 'text' not in kwargs:
+            raise self.ChatBotException(
+                'Either a statement object or a "text" keyword '
+                'argument is required. Neither was provided.'
             )
-            self.logger.info(u'Adding the previous statement "{}" as response to "{}"'.format(
-                previous_statement.text,
-                input_statement.text
-            ))
 
-        # Update the database after selecting a response
-        self.storage.update(input_statement)
+        if hasattr(statement, 'serialize'):
+            kwargs.update(**statement.serialize())
 
-        self.recent_statements.append(
-            (input_statement, response, )
+        tags = kwargs.pop('tags', [])
+
+        text = kwargs.pop('text')
+
+        input_statement = Statement(text=text, **kwargs)
+
+        input_statement.add_tags(*tags)
+
+        # Preprocess the input statement
+        for preprocessor in self.preprocessors:
+            input_statement = preprocessor(input_statement)
+
+        # Make sure the input statement has its search text saved
+
+        if not input_statement.search_text:
+            input_statement.search_text = self.storage.tagger.get_text_index_string(input_statement.text)
+
+        if not input_statement.search_in_response_to and input_statement.in_response_to:
+            input_statement.search_in_response_to = self.storage.tagger.get_text_index_string(input_statement.in_response_to)
+
+        response = self.generate_response(input_statement, additional_response_selection_parameters)
+
+        # Update any response data that needs to be changed
+        if persist_values_to_response:
+            for response_key in persist_values_to_response:
+                response_value = persist_values_to_response[response_key]
+                if response_key == 'tags':
+                    input_statement.add_tags(*response_value)
+                    response.add_tags(*response_value)
+                else:
+                    setattr(input_statement, response_key, response_value)
+                    setattr(response, response_key, response_value)
+
+        if not self.read_only:
+            self.learn_response(input_statement)
+
+            # Save the response generated for the input
+            self.storage.create(**response.serialize())
+
+        return response
+
+    def generate_response(self, input_statement, additional_response_selection_parameters=None):
+        """
+        Return a response based on a given input statement.
+
+        :param input_statement: The input statement to be processed.
+        """
+        Statement = self.storage.get_object('statement')
+
+        results = []
+        result = None
+        max_confidence = -1
+
+        for adapter in self.logic_adapters:
+            if adapter.can_process(input_statement):
+
+                output = adapter.process(input_statement, additional_response_selection_parameters)
+                results.append(output)
+
+                self.logger.info(
+                    '{} selected "{}" as a response with a confidence of {}'.format(
+                        adapter.class_name, output.text, output.confidence
+                    )
+                )
+
+                if output.confidence > max_confidence:
+                    result = output
+                    max_confidence = output.confidence
+            else:
+                self.logger.info(
+                    'Not processing the statement using {}'.format(adapter.class_name)
+                )
+
+        class ResultOption:
+            def __init__(self, statement, count=1):
+                self.statement = statement
+                self.count = count
+
+        # If multiple adapters agree on the same statement,
+        # then that statement is more likely to be the correct response
+        if len(results) >= 3:
+            result_options = {}
+            for result_option in results:
+                result_string = result_option.text + ':' + (result_option.in_response_to or '')
+
+                if result_string in result_options:
+                    result_options[result_string].count += 1
+                    if result_options[result_string].statement.confidence < result_option.confidence:
+                        result_options[result_string].statement = result_option
+                else:
+                    result_options[result_string] = ResultOption(
+                        result_option
+                    )
+
+            most_common = list(result_options.values())[0]
+
+            for result_option in result_options.values():
+                if result_option.count > most_common.count:
+                    most_common = result_option
+
+            if most_common.count > 1:
+                result = most_common.statement
+
+        response = Statement(
+            text=result.text,
+            in_response_to=input_statement.text,
+            conversation=input_statement.conversation,
+            persona='bot:' + self.name
         )
 
-        # Process the response output with the output adapter
-        return self.output.process_response(response, confidence)
+        response.confidence = result.confidence
 
-    def set_trainer(self, training_class, **kwargs):
+        return response
+
+    def learn_response(self, statement, previous_statement=None):
         """
-        Set the module used to train the chatbot.
+        Learn that the statement provided is a valid response.
         """
-        self.trainer = training_class(self.storage, **kwargs)
+        if not previous_statement:
+            previous_statement = statement.in_response_to
 
-    @property
-    def train(self):
+        if not previous_statement:
+            previous_statement = self.get_latest_response(statement.conversation)
+            if previous_statement:
+                previous_statement = previous_statement.text
+
+        previous_statement_text = previous_statement
+
+        if not isinstance(previous_statement, (str, type(None), )):
+            statement.in_response_to = previous_statement.text
+        elif isinstance(previous_statement, str):
+            statement.in_response_to = previous_statement
+
+        self.logger.info('Adding "{}" as a response to "{}"'.format(
+            statement.text,
+            previous_statement_text
+        ))
+
+        # Save the input statement
+        return self.storage.create(**statement.serialize())
+
+    def get_latest_response(self, conversation):
         """
-        Proxy method to the chat bot's trainer class.
+        Returns the latest response in a conversation if it exists.
+        Returns None if a matching conversation cannot be found.
         """
-        return self.trainer.train
+        from chatterbot.conversation import Statement as StatementObject
 
-    @classmethod
-    def from_config(self, config_file_path):
-        import json
-        with open(config_file_path, 'r') as config_file:
-            data = json.load(config_file)
+        conversation_statements = list(self.storage.filter(
+            conversation=conversation,
+            order_by=['id']
+        ))
 
-        name = data.pop('name')
+        # Get the most recent statement in the conversation if one exists
+        latest_statement = conversation_statements[-1] if conversation_statements else None
 
-        return ChatBot(name, **data)
+        if latest_statement:
+            if latest_statement.in_response_to:
 
-    class InvalidAdapterException(Exception):
+                response_statements = list(self.storage.filter(
+                    conversation=conversation,
+                    text=latest_statement.in_response_to,
+                    order_by=['id']
+                ))
 
-        def __init__(self, value='Recieved an unexpected adapter setting.'):
-            self.value = value
+                if response_statements:
+                    return response_statements[-1]
+                else:
+                    return StatementObject(
+                        text=latest_statement.in_response_to,
+                        conversation=conversation
+                    )
+            else:
+                # The case that the latest statement is not in response to another statement
+                return latest_statement
 
-        def __str__(self):
-            return repr(self.value)
+        return None
+
+    class ChatBotException(Exception):
+        pass
